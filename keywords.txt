@@ -1,4 +1,6 @@
-# One keyword or phrase per line. Lines starting with - are exclusions.
+# One keyword or phrase per line, in the language of your sources (English for the default feeds).
+# Each keyword is also searched on Hacker News (titles only).
+# Lines starting with - are exclusions: any item that contains them is skipped.
 LinkedIn
 LinkedIn algorithm
 Meta

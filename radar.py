@@ -3,12 +3,16 @@
 
 Reads RSS/Atom feeds and Hacker News, keeps only items that match your keywords,
 removes duplicates and items you have already seen, and sends a short digest to
-Telegram. Designed to run once a day on GitHub Actions. Uses only the Python
-standard library, so there is nothing to install.
+Telegram. If an Anthropic API key is set, it also asks Claude to pick the 3 most
+useful news items and suggest 3 post angles for each. Designed to run once a day
+on GitHub Actions. Uses only the Python standard library, so there is nothing to
+install.
 
   Demo (no internet, no Telegram):  python radar.py --demo
   Preview real sources:             python radar.py --dry-run
+  Prompt for any AI chat (no key):  python radar.py --print-prompt
   Send to Telegram:                 python radar.py   (needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+  Post ideas (optional):            set ANTHROPIC_API_KEY
 """
 import argparse
 import json
@@ -28,6 +32,27 @@ USER_AGENT = "trend-radar/1.0 (+https://github.com)"
 TELEGRAM_LIMIT = 4000  # Telegram allows 4096 characters per message; keep a margin
 SEEN_DAYS = 30
 TRACKING_PARAMS = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "ref")
+DEFAULT_MODEL = os.environ.get("IDEAS_MODEL", "claude-sonnet-5-5")
+DEFAULT_LANGUAGE = os.environ.get("IDEAS_LANGUAGE", "Ukrainian")
+IDEAS_POOL = 8  # how many top items are shown to the AI
+SNIPPET_CHARS = 300
+
+IDEAS_PROMPT = """You are an editor helping a B2B content marketer who writes LinkedIn posts.
+Below is a numbered list of today's news items (title, source, short snippet).
+
+Pick the 3 items that are most useful for B2B marketers to write about. For each one give:
+- "Item N" and the title
+- Why it matters for B2B marketers, in one sentence
+- 3 post angles. Each angle is a hook (the first sentence of the post) and a one-line outline.
+
+Rules:
+- Use ONLY what is in the title and snippet. Do not invent facts, numbers, quotes or product details.
+- If the snippet is thin, say "read the article before writing" instead of guessing.
+- Angles should give a practical takeaway or a clear opinion, not hype.
+- Plain text only: no markdown symbols (no asterisks, no # headings), no emojis, no tables.
+- Write the answer in {language}. Keep product names and the item titles in English.
+- Keep the whole answer under 3000 characters.
+"""
 
 
 # ---------- config ----------
@@ -130,12 +155,12 @@ def parse_feed(xml_text, source_name=""):
     return [i for i in items if i["title"] and i["link"]]
 
 
-def parse_hn(json_text, keyword):
-    """Parse a Hacker News search response (hn.algolia.com)."""
+def parse_hn(json_text, keyword, min_points=0):
+    """Parse a Hacker News search response (hn.algolia.com). Skips low-scoring stories."""
     items = []
     for hit in json.loads(json_text).get("hits", []):
         title = hit.get("title") or ""
-        if not title:
+        if not title or (hit.get("points") or 0) < min_points:
             continue
         story = f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
         published = None
@@ -221,6 +246,46 @@ def format_digest(items, today):
     return message
 
 
+def build_prompt(items, language):
+    """The text sent to the AI: instructions plus the numbered items shown in the digest."""
+    lines = [IDEAS_PROMPT.format(language=language), "News items:"]
+    for n, item in enumerate(items[:IDEAS_POOL], start=1):
+        snippet = item.get("summary", "")[:SNIPPET_CHARS] or "(no snippet)"
+        lines.append(f"{n}. {item['title']} | {item['source']} | snippet: {snippet}")
+    return "\n".join(lines)
+
+
+def call_claude(prompt, api_key, model):
+    """One call to the Anthropic Messages API, using only the standard library."""
+    body = json.dumps({
+        "model": model,
+        "max_tokens": 1500,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+    if not text:
+        raise RuntimeError("The AI returned an empty answer")
+    return text
+
+
+def format_ideas(text, today):
+    message = f"Post ideas, {today:%d %b %Y}\n(Written by AI from titles and snippets only. Read each article before you post.)\n\n{text}"
+    if len(message) > TELEGRAM_LIMIT:
+        message = message[:TELEGRAM_LIMIT - 20].rstrip() + "\n(cut)"
+    return message
+
+
 def send_telegram(text, token, chat_id):
     data = urllib.parse.urlencode({
         "chat_id": chat_id,
@@ -257,7 +322,7 @@ def fetch(url):
         return resp.read().decode("utf-8", errors="replace")
 
 
-def collect(feeds, include, use_hn, now, hours):
+def collect(feeds, include, use_hn, now, hours, min_points=0):
     items, failures, sources = [], 0, 0
     for url in feeds:
         sources += 1
@@ -275,7 +340,7 @@ def collect(feeds, include, use_hn, now, hours):
                 "numericFilters": f"created_at_i>{since}",
             })
             try:
-                items += parse_hn(fetch(f"https://hn.algolia.com/api/v1/search_by_date?{query}"), keyword)
+                items += parse_hn(fetch(f"https://hn.algolia.com/api/v1/search_by_date?{query}"), keyword, min_points)
             except Exception as exc:
                 failures += 1
                 print(f"Warning: Hacker News search failed for '{keyword}': {exc}", file=sys.stderr)
@@ -290,8 +355,14 @@ def main():
     p.add_argument("--hours", type=int, default=48, help="Only items from the last N hours (0 = no limit)")
     p.add_argument("--max-items", type=int, default=10)
     p.add_argument("--no-hn", action="store_true", help="Skip Hacker News")
+    p.add_argument("--min-hn-points", type=int, default=5, help="Ignore Hacker News stories below this score")
     p.add_argument("--dry-run", action="store_true", help="Print the digest instead of sending it")
     p.add_argument("--demo", action="store_true", help="Use the sample feeds next to this script, no internet")
+    p.add_argument("--no-ideas", action="store_true", help="Do not ask the AI for post ideas")
+    p.add_argument("--print-prompt", action="store_true",
+                   help="Print a prompt with today's items to paste into any AI chat (no API key needed)")
+    p.add_argument("--language", default=DEFAULT_LANGUAGE, help="Language of the post ideas")
+    p.add_argument("--model", default=DEFAULT_MODEL)
     args = p.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -303,10 +374,14 @@ def main():
         items = []
         for name in ("sample_rss.xml", "sample_atom.xml"):
             items += parse_feed((HERE / name).read_text(encoding="utf-8"))
-        print(format_digest(select(items, include, exclude, {}, now, 0, args.max_items), now))
+        demo_items = select(items, include, exclude, {}, now, 0, args.max_items)
+        print(format_digest(demo_items, now))
+        if args.print_prompt:
+            print("\n----- prompt for an AI chat -----\n" + build_prompt(demo_items, args.language))
         return
 
-    items, failures, sources = collect(read_lines(args.feeds), include, not args.no_hn, now, args.hours)
+    items, failures, sources = collect(read_lines(args.feeds), include, not args.no_hn, now,
+                                       args.hours, args.min_hn_points)
     if sources and failures == sources:
         sys.exit("Every source failed. Check your internet connection and the URLs in feeds.txt.")
 
@@ -316,15 +391,30 @@ def main():
         print("No new items today.")
         return
 
-    digest = format_digest(picked, now)
+    if args.print_prompt:
+        print(build_prompt(picked, args.language))
+        return
+
+    messages = []
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key and not args.no_ideas:
+        try:
+            messages.append(format_ideas(call_claude(build_prompt(picked, args.language), api_key, args.model), now))
+        except Exception as exc:  # the digest is still useful without ideas
+            print(f"Warning: could not get post ideas: {exc}", file=sys.stderr)
+    elif not args.no_ideas:
+        print("No ANTHROPIC_API_KEY set: sending the digest without post ideas.", file=sys.stderr)
+    messages.append(format_digest(picked, now))
+
     if args.dry_run:
-        print(digest)
+        print("\n\n=====\n\n".join(messages))
         return
 
     token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (GitHub: Settings > Secrets), or use --dry-run.")
-    send_telegram(digest, token, chat_id)
+    for message in messages:
+        send_telegram(message, token, chat_id)
     for item in picked:
         seen[item["key"]] = now.isoformat()
     Path(args.seen).parent.mkdir(parents=True, exist_ok=True)

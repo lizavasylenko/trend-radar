@@ -47,6 +47,13 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(items[0]["source"], "Hacker News (42 points)")
         self.assertEqual(items[1]["link"], "https://news.ycombinator.com/item?id=2")
 
+    def test_hacker_news_min_points(self):
+        payload = json.dumps({"hits": [
+            {"title": "Big story", "objectID": "1", "points": 50},
+            {"title": "Tiny story", "objectID": "2", "points": 2},
+        ]})
+        self.assertEqual([i["title"] for i in radar.parse_hn(payload, "x", min_points=5)], ["Big story"])
+
     def test_bad_date_is_none(self):
         self.assertIsNone(radar.parse_date("not a date"))
 
@@ -108,6 +115,25 @@ class OutputTests(unittest.TestCase):
         self.assertIn("sponsored", exclude)
 
 
+class IdeasTests(unittest.TestCase):
+    def test_prompt_numbers_items_like_the_digest(self):
+        items = radar.select(sample_items(), INCLUDE, EXCLUDE, {}, NOW, 0, 10)
+        prompt = radar.build_prompt(items, "Ukrainian")
+        self.assertIn("Ukrainian", prompt)
+        self.assertIn("Do not invent facts", prompt)
+        self.assertIn(f"1. {items[0]['title']} |", prompt)
+        self.assertIn(f"{len(items)}. {items[-1]['title']} |", prompt)
+
+    def test_prompt_uses_only_the_first_pool_items(self):
+        item = {"title": "T", "source": "S", "summary": "x" * 1000, "link": "https://e.com", "matched": ["B2B"]}
+        prompt = radar.build_prompt([item] * 20, "English")
+        self.assertEqual(prompt.count("snippet:"), radar.IDEAS_POOL)
+        self.assertNotIn("x" * (radar.SNIPPET_CHARS + 1), prompt)
+
+    def test_ideas_message_fits_telegram(self):
+        self.assertLessEqual(len(radar.format_ideas("a" * 9000, NOW)), 4096)
+
+
 class FullRunTests(unittest.TestCase):
     """Runs main() end to end with the network replaced by the sample files."""
 
@@ -138,7 +164,10 @@ class FullRunTests(unittest.TestCase):
             feeds = Path(tmp) / "feeds.txt"
             feeds.write_text("https://example.com/feed\n", encoding="utf-8")
             seen = Path(tmp) / "seen.json"
-            argv = ["radar.py", "--feeds", str(feeds), "--seen", str(seen), "--no-hn", "--hours", "0"]
+            kw = Path(tmp) / "keywords.txt"
+            kw.write_text("\n".join(INCLUDE + ["-sponsored"]), encoding="utf-8")
+            argv = ["radar.py", "--feeds", str(feeds), "--keywords", str(kw), "--seen", str(seen),
+                    "--no-hn", "--hours", "0"]
             env = {"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_CHAT_ID": "42"}
             with mock.patch.object(sys, "argv", argv), mock.patch.dict("os.environ", env), \
                     mock.patch("urllib.request.urlopen", fake_urlopen):
@@ -148,6 +177,58 @@ class FullRunTests(unittest.TestCase):
                 self.assertEqual(len(json.loads(seen.read_text())), 2)
                 radar.main()  # second run: everything already seen, nothing is sent
                 self.assertEqual(len(sent), 1)
+
+    def test_ideas_are_sent_first_and_failures_do_not_block_the_digest(self):
+        from unittest import mock
+
+        rss = (ROOT / "sample_rss.xml").read_text(encoding="utf-8")
+        sent, api_calls = [], []
+
+        class FakeResponse:
+            def __init__(self, body):
+                self.body = body
+            def read(self):
+                return self.body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def make_urlopen(api_works):
+            def fake_urlopen(req, timeout=30):
+                url = req.full_url
+                if url.startswith("https://api.telegram.org/bot"):
+                    sent.append(req.data.decode())
+                    return FakeResponse(b'{"ok": true}')
+                if url.startswith("https://api.anthropic.com"):
+                    api_calls.append(json.loads(req.data))
+                    if not api_works:
+                        raise OSError("API down")
+                    return FakeResponse(json.dumps(
+                        {"content": [{"type": "text", "text": "Item 1: idea one"}]}).encode())
+                return FakeResponse(rss.encode())
+            return fake_urlopen
+
+        with tempfile.TemporaryDirectory() as tmp:
+            feeds = Path(tmp) / "feeds.txt"
+            feeds.write_text("https://example.com/feed\n", encoding="utf-8")
+            kw = Path(tmp) / "keywords.txt"
+            kw.write_text("\n".join(INCLUDE + ["-sponsored"]), encoding="utf-8")
+            env = {"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_CHAT_ID": "42", "ANTHROPIC_API_KEY": "sk-test"}
+            for works, expected_messages in ((True, 2), (False, 1)):
+                sent.clear()
+                api_calls.clear()
+                seen = Path(tmp) / f"seen_{works}.json"
+                argv = ["radar.py", "--feeds", str(feeds), "--keywords", str(kw), "--seen", str(seen),
+                        "--no-hn", "--hours", "0"]
+                with mock.patch.object(sys, "argv", argv), mock.patch.dict("os.environ", env), \
+                        mock.patch("urllib.request.urlopen", make_urlopen(works)):
+                    radar.main()
+                self.assertEqual(len(sent), expected_messages)
+                self.assertEqual(len(api_calls), 1)
+                self.assertIn("Trend+radar", sent[-1])  # the digest is always last (urlencoded)
+                if works:
+                    self.assertIn("idea+one", sent[0])  # urlencoded form data
 
 
 if __name__ == "__main__":
