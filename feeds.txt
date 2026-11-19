@@ -1,0 +1,14 @@
+# One RSS or Atom feed URL per line. Lines starting with # are ignored.
+# These feeds were checked on 19 Nov 2026. Feeds move, so check them now and then.
+# Replace them with the blogs, news sites and competitor blogs you actually follow.
+
+# SEO and content
+https://blog.hubspot.com/marketing/rss.xml
+https://www.searchenginejournal.com/feed/
+https://ahrefs.com/blog/feed/
+https://www.semrush.com/blog/feed/
+
+# Social media and LinkedIn updates
+https://www.socialmediatoday.com/feeds/news/
+https://blog.hootsuite.com/feed/
+https://buffer.com/resources/rss/

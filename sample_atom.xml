@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Another Demo Feed (fictional)</title>
+  <entry>
+    <title>AI search is changing how B2B content gets found</title>
+    <link rel="alternate" href="https://example.org/ai-search-b2b"/>
+    <summary>A fictional overview.</summary>
+    <updated>2026-11-18T15:00:00Z</updated>
+  </entry>
+  <entry>
+    <title>A go-to-market checklist for a small SaaS launch</title>
+    <link href="https://example.org/gtm-checklist"/>
+    <summary>A fictional checklist.</summary>
+    <published>2026-11-17T11:00:00Z</published>
+  </entry>
+  <entry>
+    <title>Free webinar: content marketing in 2027</title>
+    <link href="https://example.org/webinar"/>
+    <summary>Sign up now.</summary>
+    <updated>2026-11-18T09:00:00Z</updated>
+  </entry>
+</feed>

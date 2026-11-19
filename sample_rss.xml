@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Synthetic Demo Blog (fictional)</title>
+    <link>https://example.com</link>
+    <description>Made-up items for testing the radar. Not real articles.</description>
+    <item>
+      <title>Why B2B buyers ignore your LinkedIn carousel</title>
+      <link>https://example.com/b2b-linkedin-carousel</link>
+      <description>&lt;p&gt;A fictional post about slide design.&lt;/p&gt;</description>
+      <pubDate>Mon, 16 Nov 2026 09:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Sponsored: the only B2B tool you will ever need</title>
+      <link>https://example.com/sponsored-tool</link>
+      <description>Paid placement.</description>
+      <pubDate>Mon, 16 Nov 2026 10:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Our office dog has a new favourite toy</title>
+      <link>https://example.com/office-dog</link>
+      <description>Nothing about marketing here.</description>
+      <pubDate>Tue, 17 Nov 2026 08:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>How product marketing teams test positioning with five customer calls</title>
+      <link>https://example.com/positioning-calls</link>
+      <description>A fictional guide.</description>
+      <pubDate>Wed, 18 Nov 2026 07:30:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Why B2B buyers ignore your LinkedIn carousel</title>
+      <link>https://www.example.com/b2b-linkedin-carousel/?utm_source=newsletter</link>
+      <description>Same post shared again with a tracking link.</description>
+      <pubDate>Wed, 18 Nov 2026 12:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
